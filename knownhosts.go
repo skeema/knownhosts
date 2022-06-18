@@ -4,7 +4,9 @@ package knownhosts
 
 import (
 	"errors"
+	"io"
 	"net"
+	"sort"
 
 	"golang.org/x/crypto/ssh"
 	xknownhosts "golang.org/x/crypto/ssh/knownhosts"
@@ -29,21 +31,45 @@ func (hkcb HostKeyCallback) HostKeyCallback() ssh.HostKeyCallback {
 	return ssh.HostKeyCallback(hkcb)
 }
 
-// HostKeyAlgorithms returns a slice of host key algorithms for the supplied
-// host:port found in the known_hosts file(s), or an empty slice if the host
-// is not already known.
-// The result may be used in ssh.ClientConfig.HostKeyAlgorithms, either as-is
-// or after filtering (if you wish to prefer or ignore particular algorithms).
-// For hosts with multiple known_hosts entries, note that the order of this
-// function's result does not match the order of lines in the known_hosts files.
-func (hkcb HostKeyCallback) HostKeyAlgorithms(hostWithPort string) (algos []string) {
+// HostKeys returns a slice of known host public keys for the supplied host:port
+// found in the known_hosts file(s), or an empty slice if the host is not
+// already known. For hosts that have multiple known_hosts entries (for
+// different key types), the result will be sorted by known_hosts filename and
+// line number.
+func (hkcb HostKeyCallback) HostKeys(hostWithPort string) (keys []ssh.PublicKey) {
 	var keyErr *xknownhosts.KeyError
 	placeholderAddr := &net.TCPAddr{IP: []byte{0, 0, 0, 0}}
 	placeholderPubKey := &fakePublicKey{}
+	var kkeys []xknownhosts.KnownKey
 	if hkcbErr := hkcb(hostWithPort, placeholderAddr, placeholderPubKey); errors.As(hkcbErr, &keyErr) {
 		for _, knownKey := range keyErr.Want {
-			algos = append(algos, knownKey.Key.Type())
+			kkeys = append(kkeys, knownKey)
 		}
+		knownKeyLess := func(i, j int) bool {
+			if kkeys[i].Filename < kkeys[j].Filename {
+				return true
+			}
+			return (kkeys[i].Filename == kkeys[j].Filename && kkeys[i].Line < kkeys[j].Line)
+		}
+		sort.Slice(kkeys, knownKeyLess)
+		keys = make([]ssh.PublicKey, len(kkeys))
+		for n := range kkeys {
+			keys[n] = kkeys[n].Key
+		}
+	}
+	return keys
+}
+
+// HostKeyAlgorithms returns a slice of host key algorithms for the supplied
+// host:port found in the known_hosts file(s), or an empty slice if the host
+// is not already known. The result may be used in ssh.ClientConfig's
+// HostKeyAlgorithms field, either as-is or after filtering (if you wish to
+// ignore or prefer particular algorithms). For hosts that have multiple
+// known_hosts entries (for different key types), the result will be sorted by
+// known_hosts filename and line number.
+func (hkcb HostKeyCallback) HostKeyAlgorithms(hostWithPort string) (algos []string) {
+	for _, key := range hkcb.HostKeys(hostWithPort) {
+		algos = append(algos, key.Type())
 	}
 	return algos
 }
@@ -54,6 +80,41 @@ func (hkcb HostKeyCallback) HostKeyAlgorithms(hostWithPort string) (algos []stri
 // rather than this package's New method.
 func HostKeyAlgorithms(cb ssh.HostKeyCallback, hostWithPort string) []string {
 	return HostKeyCallback(cb).HostKeyAlgorithms(hostWithPort)
+}
+
+// IsHostKeyChanged returns a boolean indicating whether the error indicates
+// the host key has changed. It is intended to be called on the error returned
+// from invoking a HostKeyCallback to check whether an SSH host is known.
+func IsHostKeyChanged(err error) bool {
+	var keyErr *xknownhosts.KeyError
+	return errors.As(err, &keyErr) && len(keyErr.Want) > 0
+}
+
+// IsHostUnknown returns a boolean indicating whether the error represents an
+// unknown host. It is intended to be called on the error returned from invoking
+// a HostKeyCallback to check whether an SSH host is known.
+func IsHostUnknown(err error) bool {
+	var keyErr *xknownhosts.KeyError
+	return errors.As(err, &keyErr) && len(keyErr.Want) == 0
+}
+
+// WriteKnownHost writes a known_hosts line to writer for the supplied hostname,
+// remote, and key. This is useful when writing a custom hostkey callback which
+// wraps a callback obtained from knownhosts.New to provide additional
+// known_hosts management functionality. The hostname, remote, and key typically
+// correspond to the callback's args.
+func WriteKnownHost(w io.Writer, hostname string, remote net.Addr, key ssh.PublicKey) error {
+	// Always include hostname; only also include remote if it isn't a zero value
+	// and doesn't normalize to the same string as hostname.
+	addresses := []string{hostname}
+	remoteStr := remote.String()
+	remoteStrNormalized := xknownhosts.Normalize(remoteStr)
+	if remoteStrNormalized != "[0.0.0.0]:0" && remoteStrNormalized != xknownhosts.Normalize(hostname) {
+		addresses = append(addresses, remoteStr)
+	}
+	line := xknownhosts.Line(addresses, key) + "\n"
+	_, err := w.Write([]byte(line))
+	return err
 }
 
 // fakePublicKey is used as part of the work-around for

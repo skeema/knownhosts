@@ -6,14 +6,12 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"net"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
-	xknownhosts "golang.org/x/crypto/ssh/knownhosts"
 )
 
 func TestNew(t *testing.T) {
@@ -56,16 +54,88 @@ func TestHostKeyAlgorithms(t *testing.T) {
 		actual := kh.HostKeyAlgorithms(host)
 		if len(actual) != len(expected) {
 			t.Errorf("Unexpected number of algorithms returned by HostKeyAlgorithms(%q): expected %d, found %d", host, len(expected), len(actual))
-		} else if len(expected) > 0 {
-			sort.Strings(expected)
-			sort.Strings(actual)
-			for n := range expected {
-				if expected[n] != actual[n] {
-					t.Errorf("Unexpected algorithms returned by HostKeyAlgorithms(%q): expected %v, found %v", host, expected, actual)
-					break
-				}
+			continue
+		}
+		for n := range expected {
+			if expected[n] != actual[n] {
+				t.Errorf("Unexpected algorithms returned by HostKeyAlgorithms(%q): expected %v, found %v", host, expected, actual)
+				break
 			}
 		}
+	}
+}
+
+func TestIsHostKeyChanged(t *testing.T) {
+	khPath := writeTestKnownHosts(t)
+	kh, err := New(khPath)
+	if err != nil {
+		t.Fatalf("Unexpected error from New: %v", err)
+	}
+	noAddr, _ := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
+	pubKey := generagePubKeyEd25519(t)
+
+	// Unknown host: should return false
+	if err := kh("unknown.example.test:22", noAddr, pubKey); IsHostKeyChanged(err) {
+		t.Error("IsHostKeyChanged unexpectedly returned true for unknown host")
+	}
+
+	// Known host, wrong key: should return true
+	if err := kh("multi.example.test:2233", noAddr, pubKey); !IsHostKeyChanged(err) {
+		t.Error("IsHostKeyChanged unexpectedly returned false for known host with different host key")
+	}
+
+	// Append the key for a known host that doesn't already have that key type,
+	// re-init the known_hosts, and check again: should return false
+	f, err := os.OpenFile(khPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("Unable to open %s for writing: %v", khPath, err)
+	}
+	if err := WriteKnownHost(f, "only-ecdsa.example.test:22", noAddr, pubKey); err != nil {
+		t.Fatalf("Unable to write known host line: %v", err)
+	}
+	f.Close()
+	if kh, err = New(khPath); err != nil {
+		t.Fatalf("Unexpected error from New: %v", err)
+	}
+	if err := kh("only-ecdsa.example.test:22", noAddr, pubKey); IsHostKeyChanged(err) {
+		t.Error("IsHostKeyChanged unexpectedly returned true for valid known host")
+	}
+}
+
+func TestIsHostUnknown(t *testing.T) {
+	khPath := writeTestKnownHosts(t)
+	kh, err := New(khPath)
+	if err != nil {
+		t.Fatalf("Unexpected error from New: %v", err)
+	}
+	noAddr, _ := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
+	pubKey := generagePubKeyEd25519(t)
+
+	// Unknown host: should return true
+	if err := kh("unknown.example.test:22", noAddr, pubKey); !IsHostUnknown(err) {
+		t.Error("IsHostUnknown unexpectedly returned false for unknown host")
+	}
+
+	// Known host, wrong key: should return false
+	if err := kh("multi.example.test:2233", noAddr, pubKey); IsHostUnknown(err) {
+		t.Error("IsHostUnknown unexpectedly returned true for known host with different host key")
+	}
+
+	// Append the key for an unknown host, re-init the known_hosts, and check
+	// again: should return false
+	f, err := os.OpenFile(khPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("Unable to open %s for writing: %v", khPath, err)
+	}
+	if err := WriteKnownHost(f, "newhost.example.test:22", noAddr, pubKey); err != nil {
+		t.Fatalf("Unable to write known host line: %v", err)
+	}
+	f.Close()
+	if kh, err = New(khPath); err != nil {
+		t.Fatalf("Unexpected error from New: %v", err)
+	}
+	if err := kh("newhost.example.test:22", noAddr, pubKey); IsHostUnknown(err) {
+		t.Error("IsHostUnknown unexpectedly returned true for valid known host")
 	}
 }
 
@@ -82,18 +152,21 @@ func writeTestKnownHosts(t *testing.T) string {
 		"multi.example.test:2233":      {generatePubKeyRSA(t), generatePubKeyECDSA(t), generagePubKeyEd25519(t)},
 		"192.168.1.102:2222":           {generatePubKeyECDSA(t), generagePubKeyEd25519(t)},
 	}
-	var lines []string
-	for host, keys := range hosts {
-		for _, k := range keys {
-			lines = append(lines, xknownhosts.Line([]string{host}, k))
-		}
-	}
-	contents := strings.Join(lines, "\n") + "\n"
 
 	dir := t.TempDir()
 	khPath := filepath.Join(dir, "known_hosts")
-	if err := os.WriteFile(khPath, []byte(contents), 0666); err != nil {
-		t.Fatalf("Unable to write %s: %v", khPath, err)
+	f, err := os.OpenFile(khPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("Unable to open %s for writing: %v", khPath, err)
+	}
+	defer f.Close()
+	noAddr, _ := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
+	for host, keys := range hosts {
+		for _, k := range keys {
+			if err := WriteKnownHost(f, host, noAddr, k); err != nil {
+				t.Fatalf("Unable to write known host line: %v", err)
+			}
+		}
 	}
 	return khPath
 }
