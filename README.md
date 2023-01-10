@@ -1,6 +1,6 @@
 # knownhosts: enhanced Golang SSH known_hosts management
 
-[![build status](https://img.shields.io/github/workflow/status/skeema/knownhosts/Tests/main)](https://github.com/skeema/knownhosts/actions)
+[![build status](https://img.shields.io/github/actions/workflow/status/skeema/knownhosts/tests.yml?branch=main)](https://github.com/skeema/knownhosts/actions)
 [![godoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/skeema/knownhosts)
 
 
