@@ -1,6 +1,7 @@
 package knownhosts
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -139,6 +140,75 @@ func TestIsHostUnknown(t *testing.T) {
 	}
 }
 
+func TestNormalize(t *testing.T) {
+	for in, want := range map[string]string{
+		"127.0.0.1":                 "127.0.0.1",
+		"127.0.0.1:22":              "127.0.0.1",
+		"[127.0.0.1]:22":            "127.0.0.1",
+		"[127.0.0.1]:23":            "[127.0.0.1]:23",
+		"127.0.0.1:23":              "[127.0.0.1]:23",
+		"[a.b.c]:22":                "a.b.c",
+		"abcd::abcd:abcd:abcd":      "abcd::abcd:abcd:abcd",
+		"[abcd::abcd:abcd:abcd]":    "abcd::abcd:abcd:abcd",
+		"[abcd::abcd:abcd:abcd]:22": "abcd::abcd:abcd:abcd",
+		"[abcd::abcd:abcd:abcd]:23": "[abcd::abcd:abcd:abcd]:23",
+	} {
+		got := Normalize(in)
+		if got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLine(t *testing.T) {
+	edKeyStr := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF9Wn63tLEhSWl9Ye+4x2GnruH8cq0LIh2vum/fUHrFQ"
+	edKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(edKeyStr))
+	if err != nil {
+		t.Fatalf("Unable to parse authorized key: %v", err)
+	}
+	for in, want := range map[string]string{
+		"server.org":                             "server.org " + edKeyStr,
+		"server.org:22":                          "server.org " + edKeyStr,
+		"server.org:23":                          "[server.org]:23 " + edKeyStr,
+		"[c629:1ec4:102:304:102:304:102:304]:22": "c629:1ec4:102:304:102:304:102:304 " + edKeyStr,
+		"[c629:1ec4:102:304:102:304:102:304]:23": "[c629:1ec4:102:304:102:304:102:304]:23 " + edKeyStr,
+	} {
+		if got := Line([]string{in}, edKey); got != want {
+			t.Errorf("Line(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWriteKnownHost(t *testing.T) {
+	edKeyStr := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF9Wn63tLEhSWl9Ye+4x2GnruH8cq0LIh2vum/fUHrFQ"
+	edKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(edKeyStr))
+	if err != nil {
+		t.Fatalf("Unable to parse authorized key: %v", err)
+	}
+	for _, m := range []struct {
+		hostname   string
+		remoteAddr string
+		want       string
+	}{
+		{hostname: "::1", remoteAddr: "[::1]:22", want: "::1 " + edKeyStr + "\n"},
+		{hostname: "127.0.0.1", remoteAddr: "127.0.0.1:22", want: "127.0.0.1 " + edKeyStr + "\n"},
+		{hostname: "ipv4.test", remoteAddr: "192.168.0.1:23", want: "ipv4.test,[192.168.0.1]:23 " + edKeyStr + "\n"},
+		{hostname: "ipv6.test", remoteAddr: "[ff01::1234]:23", want: "ipv6.test,[ff01::1234]:23 " + edKeyStr + "\n"},
+	} {
+		remote, err := net.ResolveTCPAddr("tcp", m.remoteAddr)
+		if err != nil {
+			t.Fatalf("Unable to resolve tcp addr: %v", err)
+		}
+		var got bytes.Buffer
+		if err = WriteKnownHost(&got, m.hostname, remote, edKey); err != nil {
+			t.Fatalf("Unable to write known host: %v", err)
+		}
+		if got.String() != m.want {
+			t.Errorf("WriteKnownHost(%q) = %q, want %q", m.hostname, got.String(), m.want)
+		}
+	}
+}
+
 // writeTestKnownHosts generates the test known_hosts file and returns the
 // file path to it. The generated file contains several hosts with a mix of
 // key types; each known host has between 1 and 3 different known host keys.
@@ -151,6 +221,7 @@ func writeTestKnownHosts(t *testing.T) string {
 		"only-ed25519.example.test:22": {generagePubKeyEd25519(t)},
 		"multi.example.test:2233":      {generatePubKeyRSA(t), generatePubKeyECDSA(t), generagePubKeyEd25519(t)},
 		"192.168.1.102:2222":           {generatePubKeyECDSA(t), generagePubKeyEd25519(t)},
+		"[fe80::abc:abc:abcd:abcd]:22": {generagePubKeyEd25519(t), generatePubKeyRSA(t)},
 	}
 
 	dir := t.TempDir()
