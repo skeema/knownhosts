@@ -73,7 +73,7 @@ func TestIsHostKeyChanged(t *testing.T) {
 		t.Fatalf("Unexpected error from New: %v", err)
 	}
 	noAddr, _ := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
-	pubKey := generagePubKeyEd25519(t)
+	pubKey := generatePubKeyEd25519(t)
 
 	// Unknown host: should return false
 	if err := kh("unknown.example.test:22", noAddr, pubKey); IsHostKeyChanged(err) {
@@ -110,7 +110,7 @@ func TestIsHostUnknown(t *testing.T) {
 		t.Fatalf("Unexpected error from New: %v", err)
 	}
 	noAddr, _ := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
-	pubKey := generagePubKeyEd25519(t)
+	pubKey := generatePubKeyEd25519(t)
 
 	// Unknown host: should return true
 	if err := kh("unknown.example.test:22", noAddr, pubKey); !IsHostUnknown(err) {
@@ -218,10 +218,10 @@ func writeTestKnownHosts(t *testing.T) string {
 	hosts := map[string][]ssh.PublicKey{
 		"only-rsa.example.test:22":     {generatePubKeyRSA(t)},
 		"only-ecdsa.example.test:22":   {generatePubKeyECDSA(t)},
-		"only-ed25519.example.test:22": {generagePubKeyEd25519(t)},
-		"multi.example.test:2233":      {generatePubKeyRSA(t), generatePubKeyECDSA(t), generagePubKeyEd25519(t)},
-		"192.168.1.102:2222":           {generatePubKeyECDSA(t), generagePubKeyEd25519(t)},
-		"[fe80::abc:abc:abcd:abcd]:22": {generagePubKeyEd25519(t), generatePubKeyRSA(t)},
+		"only-ed25519.example.test:22": {generatePubKeyEd25519(t)},
+		"multi.example.test:2233":      {generatePubKeyRSA(t), generatePubKeyECDSA(t), generatePubKeyEd25519(t)},
+		"192.168.1.102:2222":           {generatePubKeyECDSA(t), generatePubKeyEd25519(t)},
+		"[fe80::abc:abc:abcd:abcd]:22": {generatePubKeyEd25519(t), generatePubKeyRSA(t)},
 	}
 
 	dir := t.TempDir()
@@ -268,7 +268,7 @@ func generatePubKeyECDSA(t *testing.T) ssh.PublicKey {
 	return pub
 }
 
-func generagePubKeyEd25519(t *testing.T) ssh.PublicKey {
+func generatePubKeyEd25519(t *testing.T) ssh.PublicKey {
 	t.Helper()
 	rawPub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
