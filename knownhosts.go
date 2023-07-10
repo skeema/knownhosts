@@ -98,7 +98,9 @@ func IsHostUnknown(err error) bool {
 	return errors.As(err, &keyErr) && len(keyErr.Want) == 0
 }
 
-// Normalize normalizes an address into the form used in known_hosts
+// Normalize normalizes an address into the form used in known_hosts. This
+// implementation includes a fix for https://github.com/golang/go/issues/53463
+// and will omit brackets around ipv6 addresses on standard port 22.
 func Normalize(address string) string {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -114,7 +116,9 @@ func Normalize(address string) string {
 	return entry
 }
 
-// Line returns a line to append to the known_hosts files.
+// Line returns a line to append to the known_hosts files. This implementation
+// uses the local patched implementation of Normalize in order to solve
+// https://github.com/golang/go/issues/53463.
 func Line(addresses []string, key ssh.PublicKey) string {
 	var trimmed []string
 	for _, a := range addresses {
