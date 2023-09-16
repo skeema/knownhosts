@@ -5,6 +5,7 @@ package knownhosts
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sort"
@@ -140,11 +141,15 @@ func Line(addresses []string, key ssh.PublicKey) string {
 func WriteKnownHost(w io.Writer, hostname string, remote net.Addr, key ssh.PublicKey) error {
 	// Always include hostname; only also include remote if it isn't a zero value
 	// and doesn't normalize to the same string as hostname.
-	addresses := []string{hostname}
-	remoteStr := remote.String()
-	remoteStrNormalized := Normalize(remoteStr)
-	if remoteStrNormalized != "[0.0.0.0]:0" && remoteStrNormalized != Normalize(hostname) {
-		addresses = append(addresses, remoteStr)
+	hostnameNormalized := Normalize(hostname)
+	if strings.ContainsAny(hostnameNormalized, "\t ") {
+		return fmt.Errorf("knownhosts: hostname '%s' contains spaces", hostnameNormalized)
+	}
+	addresses := []string{hostnameNormalized}
+	remoteStrNormalized := Normalize(remote.String())
+	if remoteStrNormalized != "[0.0.0.0]:0" && remoteStrNormalized != hostnameNormalized &&
+		!strings.ContainsAny(remoteStrNormalized, "\t ") {
+		addresses = append(addresses, remoteStrNormalized)
 	}
 	line := Line(addresses, key) + "\n"
 	_, err := w.Write([]byte(line))
