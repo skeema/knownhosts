@@ -189,18 +189,31 @@ func TestWriteKnownHost(t *testing.T) {
 		hostname   string
 		remoteAddr string
 		want       string
+		err        string
 	}{
 		{hostname: "::1", remoteAddr: "[::1]:22", want: "::1 " + edKeyStr + "\n"},
 		{hostname: "127.0.0.1", remoteAddr: "127.0.0.1:22", want: "127.0.0.1 " + edKeyStr + "\n"},
 		{hostname: "ipv4.test", remoteAddr: "192.168.0.1:23", want: "ipv4.test,[192.168.0.1]:23 " + edKeyStr + "\n"},
 		{hostname: "ipv6.test", remoteAddr: "[ff01::1234]:23", want: "ipv6.test,[ff01::1234]:23 " + edKeyStr + "\n"},
+		{hostname: "normal.zone", remoteAddr: "[fe80::1%en0]:22", want: "normal.zone,fe80::1%en0 " + edKeyStr + "\n"},
+		{hostname: "spaces.zone", remoteAddr: "[fe80::1%Ethernet  1]:22", want: "spaces.zone " + edKeyStr + "\n"},
+		{hostname: "spaces.zone", remoteAddr: "[fe80::1%Ethernet\t2]:23", want: "spaces.zone " + edKeyStr + "\n"},
+		{hostname: "[fe80::1%Ethernet 1]:22", err: "knownhosts: hostname 'fe80::1%Ethernet 1' contains spaces"},
+		{hostname: "[fe80::1%Ethernet\t2]:23", err: "knownhosts: hostname '[fe80::1%Ethernet\t2]:23' contains spaces"},
 	} {
 		remote, err := net.ResolveTCPAddr("tcp", m.remoteAddr)
 		if err != nil {
 			t.Fatalf("Unable to resolve tcp addr: %v", err)
 		}
 		var got bytes.Buffer
-		if err = WriteKnownHost(&got, m.hostname, remote, edKey); err != nil {
+		err = WriteKnownHost(&got, m.hostname, remote, edKey)
+		if m.err != "" {
+			if err == nil || err.Error() != m.err {
+				t.Errorf("WriteKnownHost(%q) expected error %v, found %v", m.hostname, m.err, err)
+			}
+			continue
+		}
+		if err != nil {
 			t.Fatalf("Unable to write known host: %v", err)
 		}
 		if got.String() != m.want {
