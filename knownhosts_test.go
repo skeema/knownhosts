@@ -16,7 +16,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	khPath := writeTestKnownHosts(t)
+	khPath := getTestKnownHosts(t)
 
 	// Valid path should return a callback and no error; callback should be usable
 	// in ssh.ClientConfig.HostKeyCallback
@@ -35,7 +35,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestHostKeyAlgorithms(t *testing.T) {
-	khPath := writeTestKnownHosts(t)
+	khPath := getTestKnownHosts(t)
 	kh, err := New(khPath)
 	if err != nil {
 		t.Fatalf("Unexpected error from New: %v", err)
@@ -67,7 +67,7 @@ func TestHostKeyAlgorithms(t *testing.T) {
 }
 
 func TestIsHostKeyChanged(t *testing.T) {
-	khPath := writeTestKnownHosts(t)
+	khPath := getTestKnownHosts(t)
 	kh, err := New(khPath)
 	if err != nil {
 		t.Fatalf("Unexpected error from New: %v", err)
@@ -104,7 +104,7 @@ func TestIsHostKeyChanged(t *testing.T) {
 }
 
 func TestIsHostUnknown(t *testing.T) {
-	khPath := writeTestKnownHosts(t)
+	khPath := getTestKnownHosts(t)
 	kh, err := New(khPath)
 	if err != nil {
 		t.Fatalf("Unexpected error from New: %v", err)
@@ -220,6 +220,30 @@ func TestWriteKnownHost(t *testing.T) {
 			t.Errorf("WriteKnownHost(%q) = %q, want %q", m.hostname, got.String(), m.want)
 		}
 	}
+}
+
+var testKnownHostsContents []byte
+
+// getTestKnownHosts returns a path to a test known_hosts file. The file path
+// will differ between test functions, but the contents are always the same,
+// containing keys generated upon the first invocation. The file is removed
+// upon test completion.
+func getTestKnownHosts(t *testing.T) string {
+	// Re-use previously memoized result
+	if len(testKnownHostsContents) > 0 {
+		dir := t.TempDir()
+		khPath := filepath.Join(dir, "known_hosts")
+		if err := os.WriteFile(khPath, testKnownHostsContents, 0600); err != nil {
+			t.Fatalf("Unable to write to %s: %v", khPath, err)
+		}
+		return khPath
+	}
+
+	khPath := writeTestKnownHosts(t)
+	if contents, err := os.ReadFile(khPath); err == nil {
+		testKnownHostsContents = contents
+	}
+	return khPath
 }
 
 // writeTestKnownHosts generates the test known_hosts file and returns the
