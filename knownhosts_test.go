@@ -248,7 +248,7 @@ func getTestKnownHosts(t *testing.T) string {
 
 // writeTestKnownHosts generates the test known_hosts file and returns the
 // file path to it. The generated file contains several hosts with a mix of
-// key types; each known host has between 1 and 3 different known host keys.
+// key types; each known host has between 1 and 4 different known host keys.
 // If generating or writing the file fails, the test fails.
 func writeTestKnownHosts(t *testing.T) string {
 	t.Helper()
@@ -256,7 +256,7 @@ func writeTestKnownHosts(t *testing.T) string {
 		"only-rsa.example.test:22":     {generatePubKeyRSA(t)},
 		"only-ecdsa.example.test:22":   {generatePubKeyECDSA(t)},
 		"only-ed25519.example.test:22": {generatePubKeyEd25519(t)},
-		"multi.example.test:2233":      {generatePubKeyRSA(t), generatePubKeyECDSA(t), generatePubKeyEd25519(t)},
+		"multi.example.test:2233":      {generatePubKeyRSA(t), generatePubKeyECDSA(t), generatePubKeyEd25519(t), generatePubKeyEd25519(t)},
 		"192.168.1.102:2222":           {generatePubKeyECDSA(t), generatePubKeyEd25519(t)},
 		"[fe80::abc:abc:abcd:abcd]:22": {generatePubKeyEd25519(t), generatePubKeyRSA(t)},
 	}
