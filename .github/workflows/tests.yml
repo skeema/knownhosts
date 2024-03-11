@@ -1,7 +1,7 @@
 name: Tests
 on: [push, pull_request]
 env:
-  GOVERSION: "1.17"
+  GOVERSION: "1.21"
 jobs:
   test:
     name: Check code quality and run tests
@@ -20,7 +20,7 @@ jobs:
         run: test -z "$(gofmt -s -d *.go 2>&1)"
 
       - name: Run golint
-        run: go get -u golang.org/x/lint/golint && golint -set_exit_status
+        run: go get golang.org/x/lint/golint && go install golang.org/x/lint/golint && golint -set_exit_status
         
       - name: Run go vet
         run: go vet
