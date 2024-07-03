@@ -9,21 +9,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
           go-version: ${{env.GOVERSION}}
 
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Run gofmt
         run: test -z "$(gofmt -s -d *.go 2>&1)"
 
       - name: Run golint
-        run: go get golang.org/x/lint/golint && go install golang.org/x/lint/golint && golint -set_exit_status
-        
+        run: go install golang.org/x/lint/golint@latest && golint -set_exit_status
+
       - name: Run go vet
         run: go vet
-          
+
       - name: Run tests
         run: go test -v -coverprofile=coverage.out -covermode=count
+
+      - name: Report coverage
+        env:
+          COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go install github.com/mattn/goveralls@latest && goveralls -coverprofile=coverage.out -service=github
+        continue-on-error: true
