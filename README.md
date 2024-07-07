@@ -26,7 +26,7 @@ This repo ([github.com/skeema/knownhosts](https://github.com/skeema/knownhosts))
 
 Although [golang.org/x/crypto/ssh/knownhosts](https://pkg.go.dev/golang.org/x/crypto/ssh/knownhosts) doesn't directly expose a way to query its known_host map, we use a subtle trick to do so: invoke the HostKeyCallback with a valid host but a bogus key. The resulting KeyError allows us to determine which public keys are actually present for that host.
 
-By using this technique, [github.com/skeema/knownhosts](https://github.com/skeema/knownhosts) doesn't need to duplicate or re-implement any of the actual known_hosts management from [golang.org/x/crypto/ssh/knownhosts](https://pkg.go.dev/golang.org/x/crypto/ssh/knownhosts).
+By using this technique, [github.com/skeema/knownhosts](https://github.com/skeema/knownhosts) doesn't need to duplicate any of the core known_hosts host-lookup logic from [golang.org/x/crypto/ssh/knownhosts](https://pkg.go.dev/golang.org/x/crypto/ssh/knownhosts).
 
 ## Populating ssh.ClientConfig.HostKeyAlgorithms based on known_hosts
 
@@ -43,14 +43,14 @@ import (
 )
 
 func sshConfigForHost(hostWithPort string) (*ssh.ClientConfig, error) {
-	kh, err := knownhosts.New("/home/myuser/.ssh/known_hosts")
+	kh, err := knownhosts.NewDB("/home/myuser/.ssh/known_hosts")
 	if err != nil {
 		return nil, err
 	}
 	config := &ssh.ClientConfig{
 		User:              "myuser",
 		Auth:              []ssh.AuthMethod{ /* ... */ },
-		HostKeyCallback:   kh.HostKeyCallback(), // or, equivalently, use ssh.HostKeyCallback(kh)
+		HostKeyCallback:   kh.HostKeyCallback(),
 		HostKeyAlgorithms: kh.HostKeyAlgorithms(hostWithPort),
 	}
 	return config, nil
@@ -64,7 +64,7 @@ If you wish to mimic the behavior of OpenSSH's `StrictHostKeyChecking=no` or `St
 ```golang
 sshHost := "yourserver.com:22"
 khPath := "/home/myuser/.ssh/known_hosts"
-kh, err := knownhosts.New(khPath)
+kh, err := knownhosts.NewDB(khPath)
 if err != nil {
 	log.Fatal("Failed to read known_hosts: ", err)
 }
@@ -72,7 +72,8 @@ if err != nil {
 // Create a custom permissive hostkey callback which still errors on hosts
 // with changed keys, but allows unknown hosts and adds them to known_hosts
 cb := ssh.HostKeyCallback(func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-	err := kh(hostname, remote, key)
+	innerCallback := kh.HostKeyCallback()
+	err := innerCallback(hostname, remote, key)
 	if knownhosts.IsHostKeyChanged(err) {
 		return fmt.Errorf("REMOTE HOST IDENTIFICATION HAS CHANGED for host %s! This may indicate a MitM attack.", hostname)
 	} else if knownhosts.IsHostUnknown(err) {
