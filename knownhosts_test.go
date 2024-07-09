@@ -7,12 +7,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/base64"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -483,17 +480,12 @@ func appendCertTestKnownHosts(t *testing.T, filePath, hostPattern, keyType strin
 		testCertKeys[cacheKey] = pubKey
 	}
 
-	if strings.TrimSpace(hostPattern) == "" {
-		hostPattern = "*"
-	}
-
 	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		t.Fatalf("Unable to open %s for writing: %v", filePath, err)
 	}
 	defer f.Close()
-	encodedKey := base64.StdEncoding.EncodeToString(pubKey.Marshal())
-	if _, err = fmt.Fprintf(f, "@cert-authority %s %s %s\n", hostPattern, pubKey.Type(), encodedKey); err != nil {
+	if err := WriteKnownHostCA(f, hostPattern, pubKey); err != nil {
 		t.Fatalf("Unable to append @cert-authority line to %s: %v", filePath, err)
 	}
 }

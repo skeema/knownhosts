@@ -90,5 +90,4 @@ func ExampleWriteKnownHost() {
 		log.Fatal("Failed to dial: ", err)
 	}
 	defer client.Close()
-
 }

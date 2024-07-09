@@ -19,10 +19,8 @@ import (
 )
 
 // HostKeyDB wraps logic in golang.org/x/crypto/ssh/knownhosts with additional
-// behaviors, such as the ability to perform host key/algorithm lookups from the
-// known_hosts entries. It fully supports @cert-authority lines as well, and can
-// return ssh.CertAlgo* values when looking up algorithms. To create a
-// HostKeyDB, use NewDB.
+// behaviors, such as the ability to perform host key/algorithm lookups from
+// known_hosts entries.
 type HostKeyDB struct {
 	callback ssh.HostKeyCallback
 	isCert   map[string]bool // keyed by "filename:line"
@@ -70,8 +68,10 @@ func NewDB(files ...string) (*HostKeyDB, error) {
 	return hkdb, nil
 }
 
-// HostKeyCallback returns an ssh.HostKeyCallback for use in
-// ssh.ClientConfig.HostKeyCallback.
+// HostKeyCallback returns an ssh.HostKeyCallback. This can be used directly in
+// ssh.ClientConfig.HostKeyCallback, as shown in the example for NewDB.
+// Alternatively, you can wrap it with an outer callback to potentially handle
+// appending a new entry to the known_hosts file; see example in WriteKnownHost.
 func (hkdb *HostKeyDB) HostKeyCallback() ssh.HostKeyCallback {
 	return hkdb.callback
 }
@@ -88,6 +88,9 @@ type PublicKey struct {
 // already known. For hosts that have multiple known_hosts entries (for
 // different key types), the result will be sorted by known_hosts filename and
 // line number.
+// If hkdb was originally created by calling NewDB, the Cert boolean field of
+// each result entry reports whether the key corresponded to a @cert-authority
+// line. If hkdb was NOT obtained from NewDB, then Cert will always be false.
 func (hkdb *HostKeyDB) HostKeys(hostWithPort string) (keys []PublicKey) {
 	var keyErr *xknownhosts.KeyError
 	placeholderAddr := &net.TCPAddr{IP: []byte{0, 0, 0, 0}}
@@ -122,8 +125,9 @@ func (hkdb *HostKeyDB) HostKeys(hostWithPort string) (keys []PublicKey) {
 // ignore or prefer particular algorithms). For hosts that have multiple
 // known_hosts entries (of different key types), the result will be sorted by
 // known_hosts filename and line number.
-// For @cert-authority lines, the returned algorithm will be the correct
-// ssh.CertAlgo* value.
+// If hkdb was originally created by calling NewDB, any @cert-authority lines
+// in the known_hosts file will properly be converted to the corresponding
+// ssh.CertAlgo* values.
 func (hkdb *HostKeyDB) HostKeyAlgorithms(hostWithPort string) (algos []string) {
 	// We ensure that algos never contains duplicates. This is done for robustness
 	// even though currently golang.org/x/crypto/ssh/knownhosts never exposes
@@ -181,21 +185,19 @@ func keyTypeToCertAlgo(keyType string) string {
 	return ""
 }
 
-// HostKeyCallback wraps ssh.HostKeyCallback with an additional method to
-// perform host key algorithm lookups from the known_hosts entries. It is
+// HostKeyCallback wraps ssh.HostKeyCallback with additional methods to
+// perform host key and algorithm lookups from the known_hosts entries. It is
 // otherwise identical to ssh.HostKeyCallback, and does not introduce any file-
 // parsing behavior beyond what is in golang.org/x/crypto/ssh/knownhosts.
 //
-// Note that its HostKeys and HostKeyAlgorithms methods do not provide any
-// special treatment for @cert-authority lines, which will look like normal
-// non-CA host keys. For proper CA support, e.g. when building a general-purpose
-// SSH client, use HostKeyDB instead.
+// Methods of HostKeyCallback do not provide any special treatment for
+// @cert-authority lines, which will (incorrectly) look like normal non-CA host
+// keys. HostKeyCallback should generally only be used in situations in which
+// @cert-authority lines won't appear, and/or in very strict situations where
+// any extra known_hosts file-parsing is undesirable.
 //
-// HostKeyCallback should generally only be used in situations in which
-// @cert-authority lines are unlikely (for example, Git-related use-cases, since
-// Git forges generally don't use them), or in situations where the extra file-
-// parsing is undesirable, for reasons of code trust / security or perhaps
-// performance impact.
+// In most situations, use HostKeyDB and its constructor NewDB instead of using
+// the HostKeyCallback type.
 type HostKeyCallback ssh.HostKeyCallback
 
 // New creates a HostKeyCallback from the given OpenSSH known_hosts file(s). The
@@ -203,6 +205,11 @@ type HostKeyCallback ssh.HostKeyCallback
 // to ssh.HostKeyCallback, or using its HostKeyCallback method. Otherwise, it
 // operates the same as the New function in golang.org/x/crypto/ssh/knownhosts.
 // When supplying multiple files, their order does not matter.
+//
+// In most situations, you should avoid this function, as the returned value
+// does not handle @cert-authority lines correctly. See doc comment for
+// HostKeyCallback for more information. Instead, use NewDB to create a
+// HostKeyDB with proper CA support.
 func New(files ...string) (HostKeyCallback, error) {
 	cb, err := xknownhosts.New(files...)
 	return HostKeyCallback(cb), err
@@ -214,20 +221,30 @@ func (hkcb HostKeyCallback) HostKeyCallback() ssh.HostKeyCallback {
 	return ssh.HostKeyCallback(hkcb)
 }
 
+// ToDB converts the receiver into a HostKeyDB. However, the returned HostKeyDB
+// lacks proper CA support. It is usually preferable to create a CA-supporting
+// HostKeyDB instead, by using NewDB.
+// This method is provided for situations in which the calling code needs to
+// make CA support optional / user-configurable. This way, calling code can
+// conditionally create a non-CA-supporting HostKeyDB by calling New(...).ToDB()
+// or a CA-supporting HostKeyDB by calling NewDB(...).
+func (hkcb HostKeyCallback) ToDB() *HostKeyDB {
+	// This intentionally leaves the isCert map field as nil, as there is no way
+	// to retroactively populate it from just a HostKeyCallback. Methods of
+	// HostKeyDB will skip any CA-related behaviors accordingly.
+	return &HostKeyDB{callback: ssh.HostKeyCallback(hkcb)}
+}
+
 // HostKeys returns a slice of known host public keys for the supplied host:port
 // found in the known_hosts file(s), or an empty slice if the host is not
 // already known. For hosts that have multiple known_hosts entries (for
 // different key types), the result will be sorted by known_hosts filename and
 // line number.
 // In the returned values, there is no way to distinguish between CA keys
-// (known_hosts lines beginning with @cert-authority) and regular keys. To do so,
-// use HostKeyDB.HostKeys instead.
+// (known_hosts lines beginning with @cert-authority) and regular keys. To do
+// so, see NewDB and HostKeyDB.HostKeys instead.
 func (hkcb HostKeyCallback) HostKeys(hostWithPort string) []ssh.PublicKey {
-	// Approach: create a HostKeyDB without an isCert map; call its HostKeys
-	// method (which will skip the cert-related logic due to isCert map being
-	// nil); pull out the ssh.PublicKey from each result
-	hkdb := HostKeyDB{callback: ssh.HostKeyCallback(hkcb)}
-	annotatedKeys := hkdb.HostKeys(hostWithPort)
+	annotatedKeys := hkcb.ToDB().HostKeys(hostWithPort)
 	rawKeys := make([]ssh.PublicKey, len(annotatedKeys))
 	for n, ak := range annotatedKeys {
 		rawKeys[n] = ak.PublicKey
@@ -244,13 +261,10 @@ func (hkcb HostKeyCallback) HostKeys(hostWithPort string) []ssh.PublicKey {
 // known_hosts filename and line number.
 // The returned values will not include ssh.CertAlgo* values. If any
 // known_hosts lines had @cert-authority prefixes, their original key algo will
-// be returned instead. For proper CA support, use HostKeyDB.HostKeyAlgorithms.
+// be returned instead. For proper CA support, see NewDB and
+// HostKeyDB.HostKeyAlgorithms instead.
 func (hkcb HostKeyCallback) HostKeyAlgorithms(hostWithPort string) (algos []string) {
-	// Approach: create a HostKeyDB without an isCert map; call its
-	// HostKeyAlgorithms method (which will skip the cert-related logic due to
-	// isCert map being nil); the result is suitable for returning as-is
-	hkdb := HostKeyDB{callback: ssh.HostKeyCallback(hkcb)}
-	return hkdb.HostKeyAlgorithms(hostWithPort)
+	return hkcb.ToDB().HostKeyAlgorithms(hostWithPort)
 }
 
 // HostKeyAlgorithms is a convenience function for performing host key algorithm
@@ -259,7 +273,8 @@ func (hkcb HostKeyCallback) HostKeyAlgorithms(hostWithPort string) (algos []stri
 // rather than this package's New or NewDB methods.
 // The returned values will not include ssh.CertAlgo* values. If any
 // known_hosts lines had @cert-authority prefixes, their original key algo will
-// be returned instead. For proper CA support, use HostKeyDB.HostKeyAlgorithms.
+// be returned instead. For proper CA support, see NewDB and
+// HostKeyDB.HostKeyAlgorithms instead.
 func HostKeyAlgorithms(cb ssh.HostKeyCallback, hostWithPort string) []string {
 	return HostKeyCallback(cb).HostKeyAlgorithms(hostWithPort)
 }
@@ -314,7 +329,7 @@ func Line(addresses []string, key ssh.PublicKey) string {
 	}, " ")
 }
 
-// WriteKnownHost writes a known_hosts line to writer for the supplied hostname,
+// WriteKnownHost writes a known_hosts line to w for the supplied hostname,
 // remote, and key. This is useful when writing a custom hostkey callback which
 // wraps a callback obtained from this package to provide additional known_hosts
 // management functionality. The hostname, remote, and key typically correspond
@@ -335,6 +350,14 @@ func WriteKnownHost(w io.Writer, hostname string, remote net.Addr, key ssh.Publi
 	}
 	line := Line(addresses, key) + "\n"
 	_, err := w.Write([]byte(line))
+	return err
+}
+
+// WriteKnownHostCA writes a @cert-authority line to w for the supplied host
+// name/pattern and key.
+func WriteKnownHostCA(w io.Writer, hostPattern string, key ssh.PublicKey) error {
+	encodedKey := base64.StdEncoding.EncodeToString(key.Marshal())
+	_, err := fmt.Fprintf(w, "@cert-authority %s %s %s\n", hostPattern, key.Type(), encodedKey)
 	return err
 }
 
