@@ -19,7 +19,26 @@ func ExampleNew() {
 	config := &ssh.ClientConfig{
 		User:              "myuser",
 		Auth:              []ssh.AuthMethod{ /* ... */ },
-		HostKeyCallback:   kh.HostKeyCallback(), // or, equivalently, use ssh.HostKeyCallback(kh)
+		HostKeyCallback:   kh.HostKeyCallback(),
+		HostKeyAlgorithms: kh.HostKeyAlgorithms(sshHost),
+	}
+	client, err := ssh.Dial("tcp", sshHost, config)
+	if err != nil {
+		log.Fatal("Failed to dial: ", err)
+	}
+	defer client.Close()
+}
+
+func ExampleNewDB() {
+	sshHost := "yourserver.com:22"
+	kh, err := knownhosts.NewDB("/home/myuser/.ssh/known_hosts")
+	if err != nil {
+		log.Fatal("Failed to read known_hosts: ", err)
+	}
+	config := &ssh.ClientConfig{
+		User:              "myuser",
+		Auth:              []ssh.AuthMethod{ /* ... */ },
+		HostKeyCallback:   kh.HostKeyCallback(),
 		HostKeyAlgorithms: kh.HostKeyAlgorithms(sshHost),
 	}
 	client, err := ssh.Dial("tcp", sshHost, config)
@@ -32,7 +51,7 @@ func ExampleNew() {
 func ExampleWriteKnownHost() {
 	sshHost := "yourserver.com:22"
 	khPath := "/home/myuser/.ssh/known_hosts"
-	kh, err := knownhosts.New(khPath)
+	kh, err := knownhosts.NewDB(khPath)
 	if err != nil {
 		log.Fatal("Failed to read known_hosts: ", err)
 	}
@@ -40,7 +59,8 @@ func ExampleWriteKnownHost() {
 	// Create a custom permissive hostkey callback which still errors on hosts
 	// with changed keys, but allows unknown hosts and adds them to known_hosts
 	cb := ssh.HostKeyCallback(func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		err := kh(hostname, remote, key)
+		innerCallback := kh.HostKeyCallback()
+		err := innerCallback(hostname, remote, key)
 		if knownhosts.IsHostKeyChanged(err) {
 			return fmt.Errorf("REMOTE HOST IDENTIFICATION HAS CHANGED for host %s! This may indicate a MitM attack.", hostname)
 		} else if knownhosts.IsHostUnknown(err) {
@@ -70,5 +90,4 @@ func ExampleWriteKnownHost() {
 		log.Fatal("Failed to dial: ", err)
 	}
 	defer client.Close()
-
 }
