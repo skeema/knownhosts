@@ -22,13 +22,21 @@ import (
 // behaviors, such as the ability to perform host key/algorithm lookups from
 // known_hosts entries.
 type HostKeyDB struct {
-	callback ssh.HostKeyCallback
-	isCert   map[string]bool // keyed by "filename:line"
+	callback   ssh.HostKeyCallback
+	isCert     map[string]bool // keyed by "filename:line"
+	isWildcard map[string]bool // keyed by "filename:line"
 }
 
 // NewDB creates a HostKeyDB from the given OpenSSH known_hosts file(s). It
 // reads and parses the provided files one additional time (beyond logic in
-// golang.org/x/crypto/ssh/knownhosts) in order to handle CA lines properly.
+// golang.org/x/crypto/ssh/knownhosts) in order to:
+//
+//   - Handle CA lines properly and return ssh.CertAlgo* values when calling the
+//     HostKeyAlgorithms method, for use in ssh.ClientConfig.HostKeyAlgorithms
+//   - Allow * wildcards in hostnames to match on non-standard ports, providing
+//     a workaround for https://github.com/golang/go/issues/52056 in order to
+//     align with OpenSSH's wildcard behavior
+//
 // When supplying multiple files, their order does not matter.
 func NewDB(files ...string) (*HostKeyDB, error) {
 	cb, err := xknownhosts.New(files...)
@@ -36,8 +44,9 @@ func NewDB(files ...string) (*HostKeyDB, error) {
 		return nil, err
 	}
 	hkdb := &HostKeyDB{
-		callback: cb,
-		isCert:   make(map[string]bool),
+		callback:   cb,
+		isCert:     make(map[string]bool),
+		isWildcard: make(map[string]bool),
 	}
 
 	// Re-read each file a single time, looking for @cert-authority lines. The
@@ -59,6 +68,16 @@ func NewDB(files ...string) (*HostKeyDB, error) {
 			if len(line) > 15 && bytes.HasPrefix(line, []byte("@cert-authority")) && (line[15] == ' ' || line[15] == '\t') {
 				mapKey := fmt.Sprintf("%s:%d", filename, lineNum)
 				hkdb.isCert[mapKey] = true
+				line = bytes.TrimSpace(line[16:])
+			}
+			// truncate line to just the host pattern field
+			if i := bytes.IndexAny(line, "\t "); i >= 0 {
+				line = line[:i]
+			}
+			// Does the host pattern contain a * wildcard and no specific port?
+			if i := bytes.IndexRune(line, '*'); i >= 0 && !bytes.Contains(line[i:], []byte("]:")) {
+				mapKey := fmt.Sprintf("%s:%d", filename, lineNum)
+				hkdb.isWildcard[mapKey] = true
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -73,11 +92,56 @@ func NewDB(files ...string) (*HostKeyDB, error) {
 // Alternatively, you can wrap it with an outer callback to potentially handle
 // appending a new entry to the known_hosts file; see example in WriteKnownHost.
 func (hkdb *HostKeyDB) HostKeyCallback() ssh.HostKeyCallback {
-	return hkdb.callback
+	// Either NewDB found no wildcard host patterns, or hkdb was created from
+	// HostKeyCallback.ToDB in which case we didn't scan known_hosts for them:
+	// return the callback (which came from x/crypto/ssh/knownhosts) as-is
+	if len(hkdb.isWildcard) == 0 {
+		return hkdb.callback
+	}
+
+	// If we scanned for wildcards and found at least one, return a wrapped
+	// callback with extra behavior: if the host lookup found no matches, and the
+	// host arg had a non-standard port, re-do the lookup on standard port 22. If
+	// that second call returns a *xknownhosts.KeyError, filter down any resulting
+	// Want keys to known wildcard entries.
+	f := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		callbackErr := hkdb.callback(hostname, remote, key)
+		if callbackErr == nil || IsHostKeyChanged(callbackErr) { // hostname has known_host entries as-is
+			return callbackErr
+		}
+		justHost, port, splitErr := net.SplitHostPort(hostname)
+		if splitErr != nil || port == "" || port == "22" { // hostname already using standard port
+			return callbackErr
+		}
+		// If we reach here, the port was non-standard and no known_host entries
+		// were found for the non-standard port. Try again with standard port.
+		if tcpAddr, ok := remote.(*net.TCPAddr); ok && tcpAddr.Port != 22 {
+			remote = &net.TCPAddr{
+				IP:   tcpAddr.IP,
+				Port: 22,
+				Zone: tcpAddr.Zone,
+			}
+		}
+		callbackErr = hkdb.callback(justHost+":22", remote, key)
+		var keyErr *xknownhosts.KeyError
+		if errors.As(callbackErr, &keyErr) && len(keyErr.Want) > 0 {
+			wildcardKeys := make([]xknownhosts.KnownKey, 0, len(keyErr.Want))
+			for _, wantKey := range keyErr.Want {
+				if hkdb.isWildcard[fmt.Sprintf("%s:%d", wantKey.Filename, wantKey.Line)] {
+					wildcardKeys = append(wildcardKeys, wantKey)
+				}
+			}
+			callbackErr = &xknownhosts.KeyError{
+				Want: wildcardKeys,
+			}
+		}
+		return callbackErr
+	}
+	return ssh.HostKeyCallback(f)
 }
 
 // PublicKey wraps ssh.PublicKey with an additional field, to identify
-// whether they key corresponds to a certificate authority.
+// whether the key corresponds to a certificate authority.
 type PublicKey struct {
 	ssh.PublicKey
 	Cert bool
@@ -96,7 +160,8 @@ func (hkdb *HostKeyDB) HostKeys(hostWithPort string) (keys []PublicKey) {
 	placeholderAddr := &net.TCPAddr{IP: []byte{0, 0, 0, 0}}
 	placeholderPubKey := &fakePublicKey{}
 	var kkeys []xknownhosts.KnownKey
-	if hkcbErr := hkdb.callback(hostWithPort, placeholderAddr, placeholderPubKey); errors.As(hkcbErr, &keyErr) {
+	callback := hkdb.HostKeyCallback()
+	if hkcbErr := callback(hostWithPort, placeholderAddr, placeholderPubKey); errors.As(hkcbErr, &keyErr) {
 		kkeys = append(kkeys, keyErr.Want...)
 		knownKeyLess := func(i, j int) bool {
 			if kkeys[i].Filename < kkeys[j].Filename {
@@ -190,14 +255,16 @@ func keyTypeToCertAlgo(keyType string) string {
 // otherwise identical to ssh.HostKeyCallback, and does not introduce any file-
 // parsing behavior beyond what is in golang.org/x/crypto/ssh/knownhosts.
 //
+// In most situations, use HostKeyDB and its constructor NewDB instead of using
+// the HostKeyCallback type. The HostKeyCallback type is only provided for
+// backwards compatibility with older versions of this package, as well as for
+// very strict situations where any extra known_hosts file-parsing is
+// undesirable.
+//
 // Methods of HostKeyCallback do not provide any special treatment for
 // @cert-authority lines, which will (incorrectly) look like normal non-CA host
-// keys. HostKeyCallback should generally only be used in situations in which
-// @cert-authority lines won't appear, and/or in very strict situations where
-// any extra known_hosts file-parsing is undesirable.
-//
-// In most situations, use HostKeyDB and its constructor NewDB instead of using
-// the HostKeyCallback type.
+// keys. Additionally, HostKeyCallback lacks the fix for applying * wildcard
+// known_host entries to all ports, like OpenSSH's behavior.
 type HostKeyCallback ssh.HostKeyCallback
 
 // New creates a HostKeyCallback from the given OpenSSH known_hosts file(s). The
@@ -207,9 +274,9 @@ type HostKeyCallback ssh.HostKeyCallback
 // When supplying multiple files, their order does not matter.
 //
 // In most situations, you should avoid this function, as the returned value
-// does not handle @cert-authority lines correctly. See doc comment for
-// HostKeyCallback for more information. Instead, use NewDB to create a
-// HostKeyDB with proper CA support.
+// lacks several enhanced behaviors. See doc comment for HostKeyCallback for
+// more information. Instead, most callers should use NewDB to create a
+// HostKeyDB, which includes these enhancements.
 func New(files ...string) (HostKeyCallback, error) {
 	cb, err := xknownhosts.New(files...)
 	return HostKeyCallback(cb), err
@@ -222,16 +289,20 @@ func (hkcb HostKeyCallback) HostKeyCallback() ssh.HostKeyCallback {
 }
 
 // ToDB converts the receiver into a HostKeyDB. However, the returned HostKeyDB
-// lacks proper CA support. It is usually preferable to create a CA-supporting
-// HostKeyDB instead, by using NewDB.
-// This method is provided for situations in which the calling code needs to
-// make CA support optional / user-configurable. This way, calling code can
-// conditionally create a non-CA-supporting HostKeyDB by calling New(...).ToDB()
-// or a CA-supporting HostKeyDB by calling NewDB(...).
+// lacks the enhanced behaviors described in the doc comment for NewDB: proper
+// CA support, and wildcard matching on nonstandard ports.
+//
+// It is generally preferable to create a HostKeyDB by using NewDB. The ToDB
+// method is only provided for situations in which the calling code needs to
+// make the extra NewDB behaviors optional / user-configurable, perhaps for
+// reasons of performance or code trust (since NewDB reads the known_host file
+// an extra time, which may be undesirable in some strict situations). This way,
+// callers can conditionally create a non-enhanced HostKeyDB by using New and
+// ToDB. See code example.
 func (hkcb HostKeyCallback) ToDB() *HostKeyDB {
-	// This intentionally leaves the isCert map field as nil, as there is no way
-	// to retroactively populate it from just a HostKeyCallback. Methods of
-	// HostKeyDB will skip any CA-related behaviors accordingly.
+	// This intentionally leaves the isCert and isWildcard map fields as nil, as
+	// there is no way to retroactively populate them from just a HostKeyCallback.
+	// Methods of HostKeyDB will skip any related enhanced behaviors accordingly.
 	return &HostKeyDB{callback: ssh.HostKeyCallback(hkcb)}
 }
 
