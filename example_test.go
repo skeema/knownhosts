@@ -48,6 +48,45 @@ func ExampleNewDB() {
 	defer client.Close()
 }
 
+func ExampleHostKeyCallback_ToDB() {
+	khFile := "/home/myuser/.ssh/known_hosts"
+	var kh *knownhosts.HostKeyDB
+	var err error
+
+	// Example of using conditional logic to determine whether or not to perform
+	// extra parsing pass on the known_hosts file in order to enable enhanced
+	// behaviors
+	if os.Getenv("SKIP_KNOWNHOSTS_ENHANCEMENTS") != "" {
+		// Create a HostKeyDB using New + ToDB: this will skip the extra known_hosts
+		// processing
+		var cb knownhosts.HostKeyCallback
+		if cb, err = knownhosts.New(khFile); err == nil {
+			kh = cb.ToDB()
+		}
+	} else {
+		// Create a HostKeyDB using NewDB: this will perform extra known_hosts
+		// processing, allowing proper support for CAs, as well as OpenSSH-like
+		// wildcard matching on non-standard ports
+		kh, err = knownhosts.NewDB(khFile)
+	}
+	if err != nil {
+		log.Fatal("Failed to read known_hosts: ", err)
+	}
+
+	sshHost := "yourserver.com:22"
+	config := &ssh.ClientConfig{
+		User:              "myuser",
+		Auth:              []ssh.AuthMethod{ /* ... */ },
+		HostKeyCallback:   kh.HostKeyCallback(),
+		HostKeyAlgorithms: kh.HostKeyAlgorithms(sshHost),
+	}
+	client, err := ssh.Dial("tcp", sshHost, config)
+	if err != nil {
+		log.Fatal("Failed to dial: ", err)
+	}
+	defer client.Close()
+}
+
 func ExampleWriteKnownHost() {
 	sshHost := "yourserver.com:22"
 	khPath := "/home/myuser/.ssh/known_hosts"

@@ -191,13 +191,25 @@ func TestWithCertLines(t *testing.T) {
 			expectedAlgos:    []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA, ssh.CertAlgoECDSA256v01},
 		},
 		{
-			host:             "whatever.lol.test:22", // only matches the * entry
+			host:             "whatever.test:22", // only matches the * entry
+			expectedKeyTypes: []string{ssh.KeyAlgoECDSA256},
+			expectedIsCert:   []bool{true},
+			expectedAlgos:    []string{ssh.CertAlgoECDSA256v01},
+		},
+		{
+			host:             "whatever.test:22022", // only matches the * entry
 			expectedKeyTypes: []string{ssh.KeyAlgoECDSA256},
 			expectedIsCert:   []bool{true},
 			expectedAlgos:    []string{ssh.CertAlgoECDSA256v01},
 		},
 		{
 			host:             "asdf.certy.test:22",
+			expectedKeyTypes: []string{ssh.KeyAlgoRSA, ssh.KeyAlgoECDSA256, ssh.KeyAlgoED25519},
+			expectedIsCert:   []bool{true, true, true},
+			expectedAlgos:    []string{ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSAv01, ssh.CertAlgoECDSA256v01, ssh.CertAlgoED25519v01},
+		},
+		{
+			host:             "oddport.certy.test:2345",
 			expectedKeyTypes: []string{ssh.KeyAlgoRSA, ssh.KeyAlgoECDSA256, ssh.KeyAlgoED25519},
 			expectedIsCert:   []bool{true, true, true},
 			expectedAlgos:    []string{ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSAv01, ssh.CertAlgoECDSA256v01, ssh.CertAlgoED25519v01},
