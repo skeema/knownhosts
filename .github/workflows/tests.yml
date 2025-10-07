@@ -1,7 +1,7 @@
 name: Tests
 on: [push, pull_request]
 env:
-  GOVERSION: "1.23"
+  GOVERSION: "1.24"
 jobs:
   test:
     name: Check code quality and run tests
