@@ -365,26 +365,23 @@ func IsHostUnknown(err error) bool {
 }
 
 // Normalize normalizes an address into the form used in known_hosts. This
-// implementation includes a fix for https://github.com/golang/go/issues/53463
-// and will omit brackets around ipv6 addresses on standard port 22.
+// implementation fixes the buggy IPv6 edge-cases found in golang.org/x/crypto
+// below v0.42.0; see https://github.com/golang/go/issues/53463. In all other
+// cases, this simply delegates to the upstream Normalize implementation.
 func Normalize(address string) string {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		host = address
-		port = "22"
+	// Although our go.mod specifies a new-enough golang.org/x/crypto to avoid
+	// the IPv6 bug, this logic will remain in-place for sake of robustness in
+	// non-go.mod use-cases (OS package managers, hacky forks like go-git's, etc)
+	result := xknownhosts.Normalize(address)
+	if strings.HasSuffix(result, "]") && strings.HasPrefix(result, "[") {
+		return result[1 : len(result)-1]
 	}
-	entry := host
-	if port != "22" {
-		entry = "[" + entry + "]:" + port
-	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		entry = entry[1 : len(entry)-1]
-	}
-	return entry
+	return result
 }
 
 // Line returns a line to append to the known_hosts files. This implementation
 // uses the local patched implementation of Normalize in order to solve
-// https://github.com/golang/go/issues/53463.
+// https://github.com/golang/go/issues/53463 when using x/crypto below v0.42.0.
 func Line(addresses []string, key ssh.PublicKey) string {
 	var trimmed []string
 	for _, a := range addresses {

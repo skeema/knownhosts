@@ -316,6 +316,7 @@ func TestIsHostUnknown(t *testing.T) {
 }
 
 func TestNormalize(t *testing.T) {
+	// Intentionally the same test cases as upstream x/crypto
 	for in, want := range map[string]string{
 		"127.0.0.1":                 "127.0.0.1",
 		"127.0.0.1:22":              "127.0.0.1",
@@ -323,10 +324,19 @@ func TestNormalize(t *testing.T) {
 		"[127.0.0.1]:23":            "[127.0.0.1]:23",
 		"127.0.0.1:23":              "[127.0.0.1]:23",
 		"[a.b.c]:22":                "a.b.c",
+		"[a.b.c]:23":                "[a.b.c]:23",
 		"abcd::abcd:abcd:abcd":      "abcd::abcd:abcd:abcd",
 		"[abcd::abcd:abcd:abcd]":    "abcd::abcd:abcd:abcd",
 		"[abcd::abcd:abcd:abcd]:22": "abcd::abcd:abcd:abcd",
 		"[abcd::abcd:abcd:abcd]:23": "[abcd::abcd:abcd:abcd]:23",
+		"2001:db8::1":               "2001:db8::1",
+		"2001:db8::1:22":            "2001:db8::1:22",
+		"[2001:db8::1]:22":          "2001:db8::1",
+		"2001:db8::1:2200":          "2001:db8::1:2200",
+		"a.b.c.d.com:2200":          "[a.b.c.d.com]:2200",
+		"2001::db8:1":               "2001::db8:1",
+		"2001::db8:1:22":            "2001::db8:1:22",
+		"2001::db8:1:2200":          "2001::db8:1:2200",
 	} {
 		got := Normalize(in)
 		if got != want {
